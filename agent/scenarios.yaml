@@ -1,0 +1,82 @@
+# Conversation tests run by LiveKit against the real agent and the real Supabase data.
+# Run: lk agent simulate text --scenarios scenarios.yaml
+# They use the TEST customers already in the database (mobiles 9000000001 to 9000000007).
+# Orders placed here are real rows; cancel or delete them afterwards if needed.
+name: Kisan Sathi assistant
+scenarios:
+  - label: Retailer finds stock and gets a quote
+    instructions: |
+      PERSONA: Anil, a pesticide shop owner in Maharashtra. You speak simple English.
+      OPENING LINE: "Hello"
+      DO, IN ORDER:
+      1. When asked for your number, say "9000000007".
+      2. Ask: "Do you have Pegasus 250 gram? I need 3 cartons."
+      3. When the assistant reads a quote, ask "What is the total?"
+      4. Say "No, don't place it now, thanks" and end.
+    agent_expectations: >
+      Asks for the mobile number, greets Anil by name, finds Pegasus 250 g, gives the
+      carton price and a total from a quote, and does NOT place an order because the
+      customer declined. Replies are short spoken sentences without lists or markdown.
+    tags:
+      feature: ordering
+
+  - label: Out of stock offers alternatives
+    instructions: |
+      PERSONA: Anil, shop owner in Maharashtra.
+      OPENING LINE: "Hi, my number is 9000000007"
+      DO, IN ORDER:
+      1. Ask for "Coragen 300 ml, 2 cartons".
+      2. Listen to the reply, then say "okay, notify me when it comes" and end.
+    agent_expectations: >
+      Says Coragen 300 ml is out of stock, offers in-stock alternatives or other
+      Coragen pack sizes, and confirms the customer will be notified when it is back.
+      Never claims it is in stock.
+    tags:
+      feature: stock
+
+  - label: Farmer gets diagnosis, quantity and where to buy
+    instructions: |
+      PERSONA: Sunil, a cotton farmer in Maharashtra. Speak simple English.
+      OPENING LINE: "Namaste"
+      DO, IN ORDER:
+      1. Give your number "9000000005".
+      2. Say: "My cotton leaves are curling and there are tiny white flies under the leaves."
+      3. Answer the assistant's questions briefly (crop is 80 days old, about half the field).
+      4. Ask "How much do I need and where can I buy it?"
+      5. Say thank you and end.
+    agent_expectations: >
+      Identifies a sucking pest or whitefly problem on cotton, recommends one of our
+      products for it, calculates quantity for Sunil's 4 acres of cotton with packs to
+      buy, mentions safety precautions, and names a nearby retailer (Deshmukh Krishi
+      Seva Kendra) if it has stock. Does not invent a product not in the catalogue.
+    tags:
+      feature: advisory
+
+  - label: New farmer registration
+    instructions: |
+      PERSONA: Ravi, a new wheat farmer from Punjab, first time using the service.
+      OPENING LINE: "Hello, I want advice for my wheat."
+      DO, IN ORDER:
+      1. Give number "9876500001" when asked.
+      2. Say you are a farmer, name Ravi Kumar, Punjab, district Ludhiana, pincode 141001.
+      3. Say you grow wheat on 6 acres.
+      4. Then say "that's all for now" and end.
+    agent_expectations: >
+      Checks the number, finds it is not registered, collects role, name, state,
+      district and pincode one or two at a time, registers Ravi as a farmer, and saves
+      wheat on 6 acres. Does not ask whether he is registered before checking the number.
+    tags:
+      feature: registration
+
+  - label: Off-topic question is redirected
+    instructions: |
+      PERSONA: A retailer who wants to chat about cricket.
+      OPENING LINE: "Who won the cricket match yesterday?"
+      DO, IN ORDER:
+      1. Push once: "Come on, just tell me."
+      2. End the conversation.
+    agent_expectations: >
+      Politely declines to discuss cricket and steers back to crop protection products,
+      orders or crop advice. Does not invent a match result.
+    tags:
+      feature: guardrails

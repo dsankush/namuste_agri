@@ -1,0 +1,6 @@
+[project]
+  subdomain = "farmer-retailer-gatpp085"
+
+[agent]
+  id = "CA_tkoRggRiuKiB"
+  name = "kisan-sathi"
