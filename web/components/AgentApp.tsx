@@ -27,22 +27,30 @@ export default function AgentApp() {
   const cfg = useRef({ mode, language });
   cfg.current = { mode, language };
 
-  // A fresh token (and a fresh room) for every conversation.
-  const tokenSource = useMemo(
-    () =>
-      TokenSource.literal(async () => {
-        const { mode, language } = cfg.current;
-        const res = await fetch("/api/token", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mode, language: language === "auto" ? undefined : language }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Could not start the session");
+  // A fresh room for every conversation. The LiveKit hook also asks for a token when the
+  // page loads and after each call; we reuse that unused token for the next start instead of
+  // requesting a new one each time (keeps the token endpoint well under its rate limit).
+  const tokenSource = useMemo(() => {
+    let cached: { key: string; at: number; data: { serverUrl: string; participantToken: string } } | null = null;
+    return TokenSource.literal(async () => {
+      const { mode, language } = cfg.current;
+      const key = `${mode}|${language}`;
+      if (cached && cached.key === key && Date.now() - cached.at < 5 * 60_000) {
+        const data = cached.data;
+        cached = null; // each token (room) is used once
         return data;
-      }),
-    [],
-  );
+      }
+      const res = await fetch("/api/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode, language: language === "auto" ? undefined : language }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not start the session");
+      cached = { key, at: Date.now(), data };
+      return data;
+    });
+  }, []);
 
   const session = useSession(tokenSource, { agentConnectTimeoutMilliseconds: 30_000 });
 
@@ -110,6 +118,10 @@ function Shell({
       if (topic !== ACTIVITY_TOPIC) return;
       try {
         const msg = JSON.parse(new TextDecoder().decode(payload));
+        if (msg.type === "error") {
+          setError(`The assistant's ${msg.component} is not responding right now. Please try again in a few minutes.`);
+          return;
+        }
         if (msg.snapshot) setSnapshot(msg.snapshot);
         if (msg.type === "tool") {
           setEvents((prev) =>
@@ -151,6 +163,9 @@ function Shell({
       try {
         await session.start({ tracks: { microphone: { enabled: withMode === "voice" } } });
         setMicOn(withMode === "voice");
+        await session.room.localParticipant
+          .setAttributes({ mode: withMode, ...(language !== "auto" ? { language } : {}) })
+          .catch(() => {});
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error("session start failed", e);
@@ -165,7 +180,7 @@ function Shell({
         setStarting(false);
       }
     },
-    [mode, session, starting],
+    [mode, language, session, starting],
   );
 
   const end = useCallback(async () => {

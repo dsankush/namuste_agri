@@ -1091,6 +1091,43 @@ async def entrypoint(ctx: JobContext) -> None:
                     )
                 )
 
+    # --- surface provider failures (OpenAI / Sarvam) instead of going silent
+    @session.on("error")
+    def _on_error(ev) -> None:
+        src = type(ev.source).__module__ if ev.source else ""
+        component = (
+            "speech-to-text (Sarvam)"
+            if ".stt" in src or "STT" in type(ev.source).__name__
+            else "voice (Sarvam)"
+            if ".tts" in src or "TTS" in type(ev.source).__name__
+            else "AI model (OpenAI)"
+            if ".llm" in src or "LLM" in type(ev.source).__name__
+            else type(ev.source).__name__
+        )
+        inner = getattr(ev.error, "error", None) or ev.error
+        recoverable = bool(getattr(ev.error, "recoverable", False))
+        detail = f"{type(inner).__name__}: {inner}"[:400]
+        logger.error(
+            "provider error in %s (recoverable=%s): %s", component, recoverable, detail
+        )
+        if state.conversation_id:
+            state.spawn(
+                db.log_message(
+                    state.conversation_id, "system", f"ERROR {component}: {detail}"
+                )
+            )
+        if participant and not recoverable:
+            state.spawn(
+                _publish(
+                    {
+                        "type": "error",
+                        "component": component,
+                        "message": detail,
+                        "at": time.time(),
+                    }
+                )
+            )
+
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
         if getattr(ev, "new_state", None) == "listening":

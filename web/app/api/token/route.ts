@@ -10,9 +10,9 @@ const LANGUAGES = new Set([
   "hi-IN", "en-IN", "mr-IN", "gu-IN", "pa-IN", "bn-IN", "od-IN", "ta-IN", "te-IN", "kn-IN", "ml-IN",
 ]);
 
-// Light abuse protection: max 8 new sessions per IP per minute (per server instance).
+// Light abuse protection: max 20 token requests per IP per minute (per server instance).
 const WINDOW_MS = 60_000;
-const MAX_PER_WINDOW = 8;
+const MAX_PER_WINDOW = 20;
 const hits = new Map<string, number[]>();
 
 function rateLimited(ip: string): boolean {
