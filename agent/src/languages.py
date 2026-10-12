@@ -54,3 +54,49 @@ def normalise(lang: str | None) -> str:
 
 def name(code: str) -> str:
     return TTS_LANGUAGES.get(normalise(code), "Hindi")
+
+
+# ---------------------------------------------------------------------------
+# Spoken lines that don't need the AI model (play instantly).
+# Written for a female assistant voice; adjust if you switch to a male speaker.
+# ---------------------------------------------------------------------------
+GREETINGS: dict[str, str] = {
+    "hi-IN": "नमस्ते! मैं {a}, {c} से बोल रही हूँ। अपना मोबाइल नंबर बताइए?",
+    "en-IN": "Hello! I'm {a} from {c}. Could you tell me your mobile number?",
+    "mr-IN": "नमस्कार! मी {a}, {c} मधून बोलतेय. तुमचा मोबाईल नंबर सांगाल का?",
+    "gu-IN": "નમસ્તે! હું {a}, {c} માંથી બોલું છું. તમારો મોબાઇલ નંબર કહેશો?",
+    "pa-IN": "ਸਤ ਸ੍ਰੀ ਅਕਾਲ ਜੀ! ਮੈਂ {a}, {c} ਤੋਂ ਬੋਲ ਰਹੀ ਹਾਂ। ਆਪਣਾ ਮੋਬਾਈਲ ਨੰਬਰ ਦੱਸੋ?",
+    "bn-IN": "নমস্কার! আমি {a}, {c} থেকে বলছি। আপনার মোবাইল নম্বরটা বলবেন?",
+    "od-IN": "ନମସ୍କାର! ମୁଁ {a}, {c} ରୁ କହୁଛି। ଆପଣଙ୍କ ମୋବାଇଲ ନମ୍ବର କହିବେ କି?",
+    "ta-IN": "வணக்கம்! நான் {a}, {c}-லிருந்து பேசுகிறேன். உங்கள் மொபைல் நம்பரை சொல்ல முடியுமா?",
+    "te-IN": "నమస్కారం! నేను {a}, {c} నుండి మాట్లాడుతున్నాను. మీ మొబైల్ నంబర్ చెప్తారా?",
+    "kn-IN": "ನಮಸ್ಕಾರ! ನಾನು {a}, {c} ಇಂದ ಮಾತಾಡ್ತಿದ್ದೀನಿ. ನಿಮ್ಮ ಮೊಬೈಲ್ ನಂಬರ್ ಹೇಳ್ತೀರಾ?",
+    "ml-IN": "നമസ്കാരം! ഞാൻ {a}, {c}-ൽ നിന്ന് സംസാരിക്കുന്നു. നിങ്ങളുടെ മൊബൈൽ നമ്പർ പറയാമോ?",
+}
+
+# Short lines spoken while a lookup takes more than a moment.
+FILLERS: dict[str, list[str]] = {
+    "hi-IN": ["एक सेकंड, देख रही हूँ।", "हाँ जी, बस एक मिनट।", "ठीक है, चेक करती हूँ।"],
+    "en-IN": ["One second, let me check.", "Sure, just a moment."],
+    "mr-IN": ["एक सेकंद, बघते हं.", "हो, जरा थांबा."],
+    "gu-IN": ["એક સેકન્ડ, જોઉં છું.", "હા, એક મિનિટ."],
+    "pa-IN": ["ਇੱਕ ਸਕਿੰਟ, ਵੇਖਦੀ ਹਾਂ।", "ਹਾਂ ਜੀ, ਬੱਸ ਇੱਕ ਮਿੰਟ।"],
+    "bn-IN": ["এক সেকেন্ড, দেখছি।", "হ্যাঁ, একটু অপেক্ষা করুন।"],
+    "od-IN": ["ଗୋଟିଏ ସେକେଣ୍ଡ, ଦେଖୁଛି।", "ହଁ, ଟିକେ ଅପେକ୍ଷା କରନ୍ତୁ।"],
+    "ta-IN": ["ஒரு நொடி, பார்க்கிறேன்.", "சரி, கொஞ்சம் காத்திருங்கள்."],
+    "te-IN": ["ఒక్క సెకను, చూస్తున్నాను.", "సరే, ఒక్క నిమిషం."],
+    "kn-IN": ["ಒಂದು ಸೆಕೆಂಡ್, ನೋಡ್ತೀನಿ.", "ಸರಿ, ಸ್ವಲ್ಪ ಇರಿ."],
+    "ml-IN": ["ഒരു സെക്കൻഡ്, നോക്കട്ടെ.", "ശരി, ഒരു നിമിഷം."],
+}
+
+
+def greeting(lang: str, assistant: str, company: str) -> str:
+    return GREETINGS.get(normalise(lang), GREETINGS[DEFAULT_LANGUAGE]).format(
+        a=assistant, c=company
+    )
+
+
+def filler(lang: str) -> str:
+    import random
+
+    return random.choice(FILLERS.get(normalise(lang), FILLERS[DEFAULT_LANGUAGE]))

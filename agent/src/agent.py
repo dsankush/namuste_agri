@@ -46,6 +46,8 @@ logger = logging.getLogger("agent")
 load_dotenv(".env.local")
 
 QUOTE_TTL_SECONDS = 10 * 60
+# Speak a short "one second, checking" line if a lookup keeps the caller waiting this long.
+FILLER_DELAY_SECONDS = float(os.getenv("FILLER_DELAY_SECONDS", "0.8"))
 MAX_CARTONS_PER_LINE = 10_000
 
 
@@ -149,6 +151,15 @@ class BaseAgent(Agent):
             role=self.state.role or "",
             channel="typed chat" if self.state.channel == "chat" else "a voice call",
         )
+
+    def waiting(self, context: RunContext[SessionState]):
+        """Plays a short filler line (voice only) if the wrapped lookup takes a moment."""
+        st = self.state
+
+        def source(_step: int) -> str | None:
+            return None if st.channel == "chat" else languages.filler(st.language)
+
+        return context.with_filler(source, delay=FILLER_DELAY_SECONDS)
 
     async def refresh(self) -> None:
         await self.update_instructions(self.render())
@@ -266,18 +277,19 @@ class CustomerAgent(BaseAgent):
         await self.refresh()
         return "Profile updated."
 
-    async def _search(self, query, crop, category, role) -> str:
+    async def _search(self, context, query, crop, category, role) -> str:
         db = self.state.db
-        try:
-            res = await db.search_products(
-                query, crop, category, self.state.state_code, role, 3
-            )
-            if not res and crop:
+        async with self.waiting(context):
+            try:
                 res = await db.search_products(
-                    None, crop, category, self.state.state_code, role, 3
+                    query, crop, category, self.state.state_code, role, 3
                 )
-        except DBError as e:
-            raise _err(e) from e
+                if not res and crop:
+                    res = await db.search_products(
+                        None, crop, category, self.state.state_code, role, 3
+                    )
+            except DBError as e:
+                raise _err(e) from e
         if not res:
             return "No matching product in our catalogue. Ask what they need it for, or log it with log_missing_product."
         return compact(res)
@@ -296,8 +308,9 @@ class IntakeAgent(BaseAgent):
         super().__init__(state, **kwargs)
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(
-            instructions=f"Greet the customer warmly as the {prompts.COMPANY} assistant in one sentence and ask for their mobile number."
+        # Fixed greeting: plays instantly instead of waiting for the AI model.
+        self.session.say(
+            languages.greeting(self.state.language, prompts.ASSISTANT, prompts.COMPANY)
         )
 
     def _next_agent(self) -> Agent:
@@ -333,10 +346,11 @@ class IntakeAgent(BaseAgent):
             raise ToolError(
                 "INVALID_MOBILE: ask the customer to say their 10-digit mobile number again."
             )
-        try:
-            profile = await self.state.db.find_customer(digits)
-        except DBError as e:
-            raise _err(e) from e
+        async with self.waiting(context):
+            try:
+                profile = await self.state.db.find_customer(digits)
+            except DBError as e:
+                raise _err(e) from e
         if not profile:
             self.state.pending_mobile = digits
             return "Not registered. Ask whether they are a farmer, retailer or distributor, then collect registration details."
@@ -389,22 +403,23 @@ class IntakeAgent(BaseAgent):
         """Register a new customer after lookup_customer found no match. Confirm the details with the customer first."""
         if not self.state.pending_mobile:
             raise ToolError("Call lookup_customer with their mobile number first.")
-        try:
-            profile = await self.state.db.register_customer(
-                mobile=self.state.pending_mobile,
-                name=name,
-                role=role,
-                state=state,
-                district=district,
-                city=city,
-                village=village,
-                pincode=pincode,
-                shop_name=shop_name,
-                address_line=address_line,
-                language=self.state.language,
-            )
-        except DBError as e:
-            raise _err(e) from e
+        async with self.waiting(context):
+            try:
+                profile = await self.state.db.register_customer(
+                    mobile=self.state.pending_mobile,
+                    name=name,
+                    role=role,
+                    state=state,
+                    district=district,
+                    city=city,
+                    village=village,
+                    pincode=pincode,
+                    shop_name=shop_name,
+                    address_line=address_line,
+                    language=self.state.language,
+                )
+            except DBError as e:
+                raise _err(e) from e
         self.state.language_locked = True  # keep the language they registered in
         for c in crops or []:
             if c.crop and c.acres and c.acres > 0:
@@ -441,7 +456,7 @@ class TradeAgent(CustomerAgent):
         category: Literal["insecticide", "fungicide", "herbicide"] | None = None,
     ) -> str:
         """Search the catalogue. Returns products with packs, carton price for this customer, minimum order and stock."""
-        return await self._search(query, crop, category, self.state.role)
+        return await self._search(context, query, crop, category, self.state.role)
 
     @function_tool
     async def find_alternatives(
@@ -452,12 +467,13 @@ class TradeAgent(CustomerAgent):
         ],
     ) -> str:
         """Find in-stock alternatives (same active ingredient first, then products for the same pests)."""
-        try:
-            res = await self.state.db.alternatives(
-                sku_code, self.state.state_code, self.state.role
-            )
-        except DBError as e:
-            raise _err(e) from e
+        async with self.waiting(context):
+            try:
+                res = await self.state.db.alternatives(
+                    sku_code, self.state.state_code, self.state.role
+                )
+            except DBError as e:
+                raise _err(e) from e
         return (
             compact(res)
             if res
@@ -470,12 +486,13 @@ class TradeAgent(CustomerAgent):
     ) -> str:
         """Get a fresh quote with live price and stock, and hold available stock for 10 minutes. Always call before place_order."""
         lines = self._lines(items)
-        try:
-            quote = await self.state.db.quote(
-                self.state.customer_id, self.state.role, lines
-            )
-        except DBError as e:
-            raise _err(e) from e
+        async with self.waiting(context):
+            try:
+                quote = await self.state.db.quote(
+                    self.state.customer_id, self.state.role, lines
+                )
+            except DBError as e:
+                raise _err(e) from e
         self.state.last_quote = quote
         self.state.last_quote_at = time.monotonic()
         self.state.spawn(self.state.db.save_cart(self.state.customer_id, lines))
@@ -512,17 +529,18 @@ class TradeAgent(CustomerAgent):
             raise ToolError(
                 "The items differ from the last quote. Call quote_order with these items first."
             )
-        try:
-            res = await st.db.place_order(
-                st.customer_id,
-                st.role,
-                lines,
-                payment_mode,
-                st.channel,
-                st.conversation_id,
-            )
-        except DBError as e:
-            raise _err(e) from e
+        async with self.waiting(context):
+            try:
+                res = await st.db.place_order(
+                    st.customer_id,
+                    st.role,
+                    lines,
+                    payment_mode,
+                    st.channel,
+                    st.conversation_id,
+                )
+            except DBError as e:
+                raise _err(e) from e
         st.last_quote = None
         try:
             st.customer = await st.db.customer_profile(st.customer_id)
@@ -540,10 +558,11 @@ class TradeAgent(CustomerAgent):
         ] = None,
     ) -> str:
         """Get status and items of this customer's orders."""
-        try:
-            res = await self.state.db.orders(self.state.customer_id, order_number)
-        except DBError as e:
-            raise _err(e) from e
+        async with self.waiting(context):
+            try:
+                res = await self.state.db.orders(self.state.customer_id, order_number)
+            except DBError as e:
+                raise _err(e) from e
         return compact(res) if res else "No orders found."
 
     @function_tool
@@ -647,10 +666,11 @@ class FarmerAgent(CustomerAgent):
         ],
     ) -> str:
         """Known problems for a crop with their symptoms and our recommended products. Compare with what the farmer sees."""
-        try:
-            res = await self.state.db.crop_issues(crop, self.state.state_code)
-        except DBError as e:
-            raise _err(e) from e
+        async with self.waiting(context):
+            try:
+                res = await self.state.db.crop_issues(crop, self.state.state_code)
+            except DBError as e:
+                raise _err(e) from e
         return (
             compact(res)
             if res
@@ -669,7 +689,7 @@ class FarmerAgent(CustomerAgent):
         category: Literal["insecticide", "fungicide", "herbicide"] | None = None,
     ) -> str:
         """Search products (farmers see MRP per pack, not trade prices)."""
-        return await self._search(query, crop, category, None)
+        return await self._search(context, query, crop, category, None)
 
     @function_tool
     async def calculate_quantity(
@@ -706,10 +726,11 @@ class FarmerAgent(CustomerAgent):
             acres = float(saved["acres"])
         if acres <= 0 or acres > 10_000:
             raise ToolError("ACRES_REQUIRED: ask for the acres again.")
-        try:
-            result = await st.db.farmer_quantity(product, crop, acres)
-        except DBError as e:
-            raise _err(e) from e
+        async with self.waiting(context):
+            try:
+                result = await st.db.farmer_quantity(product, crop, acres)
+            except DBError as e:
+                raise _err(e) from e
 
         if not saved:  # remember a crop the farmer mentioned for the first time
             try:
@@ -749,12 +770,13 @@ class FarmerAgent(CustomerAgent):
     ) -> str:
         """Registered retailers near the farmer who have this product in stock."""
         c = self.state.customer or {}
-        try:
-            res = await self.state.db.nearby_retailers(
-                product, c.get("pincode"), c.get("state_code"), c.get("district")
-            )
-        except DBError as e:
-            raise _err(e) from e
+        async with self.waiting(context):
+            try:
+                res = await self.state.db.nearby_retailers(
+                    product, c.get("pincode"), c.get("state_code"), c.get("district")
+                )
+            except DBError as e:
+                raise _err(e) from e
         if not res:
             return "No registered retailer nearby has it in stock. Offer talk_to_human so the team can arrange it."
         return compact(res)
@@ -852,7 +874,13 @@ def _build_tts(language: str) -> sarvam.TTS:
         target_language_code=language,
         model=os.getenv("SARVAM_TTS_MODEL", "bulbul:v3"),
         speaker=os.getenv("SARVAM_TTS_SPEAKER", "priya"),
-        pace=float(os.getenv("SARVAM_TTS_PACE", "1.0")),
+        # A touch faster than default; Indian callers find 1.0 slow on the phone.
+        pace=float(os.getenv("SARVAM_TTS_PACE", "1.1")),
+        # Higher = more expressive, less flat. 0.6 is Sarvam's default.
+        temperature=float(os.getenv("SARVAM_TTS_TEMPERATURE", "0.75")),
+        # Start speaking after ~30 characters instead of 50 (lower = faster first audio).
+        min_buffer_size=30,
+        max_chunk_length=150,
         speech_sample_rate=24000,
     )
 
@@ -1003,6 +1031,11 @@ async def entrypoint(ctx: JobContext) -> None:
         turn_handling=TurnHandlingOptions(
             turn_detection=inference.TurnDetector(),
             interruption={"mode": "adaptive"},
+            # Reply sooner after the customer stops talking (intake waits longer for numbers).
+            endpointing={
+                "min_delay": float(os.getenv("ENDPOINT_MIN_DELAY", "0.35")),
+                "max_delay": float(os.getenv("ENDPOINT_MAX_DELAY", "2.5")),
+            },
             # Off: tools place orders, so never generate before the user finishes.
             preemptive_generation={"enabled": False},
         ),

@@ -8,6 +8,7 @@ Full conversation tests against LiveKit Cloud live in scenarios.yaml
 
 import asyncio
 import os
+from typing import ClassVar
 
 import pytest
 
@@ -65,7 +66,15 @@ class FakeDB:
 
 
 class Ctx:
-    pass
+    """Stand-in for RunContext; records filler requests."""
+
+    fillers: ClassVar[list] = []
+
+    def with_filler(self, source, delay=0, **_):
+        import contextlib
+
+        Ctx.fillers.append((source, delay))
+        return contextlib.nullcontext()
 
 
 @pytest.fixture
@@ -160,3 +169,21 @@ async def test_registration_saves_farmer_crops(state):
     )
     assert isinstance(agent, A.FarmerAgent)
     assert state.db.calls.count("upsert_crop") == 1
+
+
+def test_greeting_and_fillers_cover_every_language():
+    for code in L.TTS_LANGUAGES:
+        assert "{" not in L.greeting(code, "Priya", "Kisan Sathi")
+        assert L.filler(code)
+
+
+async def test_lookups_use_fillers_but_not_in_chat(state):
+    Ctx.fillers.clear()
+    intake = A.IntakeAgent(state=state)
+    await intake.lookup_customer(Ctx(), "9000000007")
+    source, delay = Ctx.fillers[-1]
+    assert delay > 0
+    state.channel = "voice"
+    assert source(0)  # voice: speaks a filler
+    state.channel = "chat"
+    assert source(0) is None  # chat: no filler message
