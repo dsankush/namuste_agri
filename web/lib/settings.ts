@@ -1,3 +1,5 @@
+import { DEFAULT_NATURAL_VOICE, NATURAL_VOICES } from "./voices";
+
 // Agent settings edited from the Settings panel. Mirrors agent/src/settings.py:
 // the same names, defaults and safe ranges (the agent clamps again on its side).
 
@@ -10,6 +12,11 @@ export const MALE_SPEAKERS = [
   "sumit", "ratan", "aayan", "ashutosh", "advait",
 ] as const;
 export const SPEAKERS: readonly string[] = [...FEMALE_SPEAKERS, ...MALE_SPEAKERS];
+
+export const ENGINES = [
+  { value: "natural", label: "Natural · Bulbul v4 persona voices (recommended)" },
+  { value: "classic", label: "Classic · Bulbul v3" },
+] as const;
 
 export const STYLES = [
   { value: "casual", label: "Casual · like a village shop" },
@@ -40,6 +47,9 @@ export const SETTING_LANGUAGES = [
 ] as const;
 
 export type AgentSettings = {
+  voice_engine: string;
+  voice_natural: string;
+  voice_pitch: number;
   voice_speaker: string;
   voice_pace: number;
   voice_expressiveness: number;
@@ -63,6 +73,9 @@ export type AgentSettings = {
 };
 
 export const DEFAULTS: AgentSettings = {
+  voice_engine: "natural",
+  voice_natural: DEFAULT_NATURAL_VOICE,
+  voice_pitch: 0,
   voice_speaker: "priya",
   voice_pace: 1.1,
   voice_expressiveness: 0.75,
@@ -87,6 +100,7 @@ export const DEFAULTS: AgentSettings = {
 
 /** Slider ranges: [min, max, step]. Same limits as the agent. */
 export const RANGES = {
+  voice_pitch: [-0.5, 0.5, 0.05],
   voice_pace: [0.5, 2.0, 0.05],
   voice_expressiveness: [0.1, 1.2, 0.05],
   reply_delay: [0.2, 1.5, 0.05],
@@ -119,7 +133,11 @@ export function cleanSettings(raw: unknown): AgentSettings {
   const d = DEFAULTS;
   const name = String(r.assistant_name ?? "").trim().slice(0, 30) || d.assistant_name;
   const model = String(r.llm_model ?? "").trim();
+  const natural = String(r.voice_natural ?? "").toLowerCase();
   return {
+    voice_engine: pick(r.voice_engine, ENGINES.map((e) => e.value), d.voice_engine),
+    voice_natural: NATURAL_VOICES.some((v) => v.id === natural) ? natural : d.voice_natural,
+    voice_pitch: num(r.voice_pitch, "voice_pitch"),
     voice_speaker: pick(String(r.voice_speaker ?? "").toLowerCase(), SPEAKERS, d.voice_speaker),
     voice_pace: num(r.voice_pace, "voice_pace"),
     voice_expressiveness: num(r.voice_expressiveness, "voice_expressiveness"),
@@ -143,4 +161,18 @@ export function cleanSettings(raw: unknown): AgentSettings {
   };
 }
 
-export const isMale = (speaker: string) => (MALE_SPEAKERS as readonly string[]).includes(speaker);
+export const isClassicMale = (speaker: string) => (MALE_SPEAKERS as readonly string[]).includes(speaker);
+
+/** Whether the assistant speaks as a man (decides wording like "रहा/रही"). */
+export const isMale = (s: AgentSettings) =>
+  s.voice_engine === "natural"
+    ? NATURAL_VOICES.find((v) => v.id === s.voice_natural)?.gender === "male"
+    : isClassicMale(s.voice_speaker);
+
+/** Classic voice used when a language has no natural voice; matches the natural voice's gender. */
+export const backupSpeaker = (s: AgentSettings) =>
+  s.voice_engine === "natural" && isClassicMale(s.voice_speaker) !== isMale(s)
+    ? isMale(s)
+      ? "shubh"
+      : "priya"
+    : s.voice_speaker;

@@ -6,6 +6,7 @@ import {
   AMBIENCE,
   type AgentSettings,
   DEFAULTS,
+  ENGINES,
   FEMALE_SPEAKERS,
   LENGTHS,
   MALE_SPEAKERS,
@@ -14,9 +15,12 @@ import {
   SETTING_LANGUAGES,
   STYLES,
 } from "@/lib/settings";
+import { NATURAL_VOICES } from "@/lib/voices";
 
 const PW_KEY = "kisan-admin-pw";
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const LANG_NAMES = Object.fromEntries(SETTING_LANGUAGES.map(([c, n]) => [c.split("-")[0], n]));
+const voiceLabel = (v: (typeof NATURAL_VOICES)[number]) => `${v.name} · ${v.style}`;
 
 type Status = { kind: "idle" | "ok" | "error"; text: string };
 
@@ -155,6 +159,7 @@ export default function SettingsPanel({ open, onClose }: { open: boolean; onClos
   const [busy, setBusy] = useState<"" | "load" | "save" | "reset" | "preview">("");
   const [status, setStatus] = useState<Status>({ kind: "idle", text: "" });
   const [playing, setPlaying] = useState(false);
+  const [heard, setHeard] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const dirty = JSON.stringify(s) !== JSON.stringify(saved);
@@ -261,7 +266,11 @@ export default function SettingsPanel({ open, onClose }: { open: boolean; onClos
     }
     setBusy("preview");
     try {
-      const { audio } = await call("/api/settings/preview", { method: "POST", body: JSON.stringify({ settings: s }) });
+      const { audio, voice } = await call("/api/settings/preview", {
+        method: "POST",
+        body: JSON.stringify({ settings: s }),
+      });
+      setHeard(voice || "");
       const el = audioRef.current ?? new Audio();
       audioRef.current = el;
       el.src = audio;
@@ -274,6 +283,12 @@ export default function SettingsPanel({ open, onClose }: { open: boolean; onClos
       setBusy("");
     }
   };
+
+  // Natural voices for the default language (Hindi if that language has none).
+  const defaultTag = s.default_language.split("-")[0];
+  const naturalTag = NATURAL_VOICES.some((v) => v.lang === defaultTag) ? defaultTag : "hi";
+  const naturalList = NATURAL_VOICES.filter((v) => v.lang === naturalTag);
+  const chosenNatural = NATURAL_VOICES.find((v) => v.id === s.voice_natural);
 
   if (!open) return null;
 
@@ -345,7 +360,59 @@ export default function SettingsPanel({ open, onClose }: { open: boolean; onClos
           <>
             <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5">
               <Section title="Voice" hint="How the assistant sounds on calls.">
-                <Field label="Speaker">
+                <Field
+                  label="Voice quality"
+                  hint={
+                    s.voice_engine === "natural"
+                      ? "Natural voices are recorded for a job (customer care, conversation) and sound the most human."
+                      : "Classic voices work in every language but sound flatter."
+                  }
+                >
+                  <Select label="Voice quality" value={s.voice_engine} onChange={(v) => set("voice_engine", v)}>
+                    {ENGINES.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                {s.voice_engine === "natural" && (
+                  <Field
+                    label={`Voice (${LANG_NAMES[naturalTag] ?? "Hindi"})`}
+                    hint={
+                      naturalTag === s.default_language.split("-")[0]
+                        ? "When the customer switches language, the same person (or the closest voice of the same gender) is used automatically."
+                        : `No natural ${LANG_NAMES[s.default_language.split("-")[0]]} voice yet, so that language uses the backup voice below. Showing Hindi voices.`
+                    }
+                  >
+                    <Select label="Natural voice" value={s.voice_natural} onChange={(v) => set("voice_natural", v)}>
+                      {!naturalList.some((v) => v.id === s.voice_natural) && chosenNatural && (
+                        <option value={chosenNatural.id}>
+                          {voiceLabel(chosenNatural)} ({LANG_NAMES[chosenNatural.lang] ?? chosenNatural.lang})
+                        </option>
+                      )}
+                      {(["female", "male"] as const).map((g) => (
+                        <optgroup key={g} label={g === "female" ? "Female" : "Male"}>
+                          {naturalList
+                            .filter((v) => v.gender === g)
+                            .map((v) => (
+                              <option key={v.id} value={v.id}>
+                                {voiceLabel(v)}
+                              </option>
+                            ))}
+                        </optgroup>
+                      ))}
+                    </Select>
+                  </Field>
+                )}
+                <Field
+                  label={s.voice_engine === "natural" ? "Backup voice" : "Speaker"}
+                  hint={
+                    s.voice_engine === "natural"
+                      ? "Used only for languages without a natural voice (for example Odia and Malayalam). Matched to the natural voice's gender."
+                      : undefined
+                  }
+                >
                   <Select label="Speaker" value={s.voice_speaker} onChange={(v) => set("voice_speaker", v)}>
                     <optgroup label="Female">
                       {FEMALE_SPEAKERS.map((v) => (
@@ -373,15 +440,28 @@ export default function SettingsPanel({ open, onClose }: { open: boolean; onClos
                   right="Faster"
                   hint="1.0 is normal. 1.05–1.2 sounds most natural for quick conversation."
                 />
-                <Slider
-                  label="Expressiveness"
-                  value={s.voice_expressiveness}
-                  range={RANGES.voice_expressiveness}
-                  onChange={(v) => set("voice_expressiveness", v)}
-                  left="Flat, steady"
-                  right="Lively, varied"
-                  hint="Higher sounds more human and emotional; too high can sound uneven."
-                />
+                {s.voice_engine === "natural" ? (
+                  <Slider
+                    label="Pitch"
+                    value={s.voice_pitch}
+                    range={RANGES.voice_pitch}
+                    onChange={(v) => set("voice_pitch", v)}
+                    format={(v) => (v > 0 ? `+${v.toFixed(2)}` : v.toFixed(2))}
+                    left="Deeper"
+                    right="Higher"
+                    hint="0 is the voice's natural pitch. Small changes (±0.1) sound best."
+                  />
+                ) : (
+                  <Slider
+                    label="Expressiveness"
+                    value={s.voice_expressiveness}
+                    range={RANGES.voice_expressiveness}
+                    onChange={(v) => set("voice_expressiveness", v)}
+                    left="Flat, steady"
+                    right="Lively, varied"
+                    hint="Higher sounds more human and emotional; too high can sound uneven."
+                  />
+                )}
                 <button
                   onClick={preview}
                   disabled={busy === "preview"}
@@ -396,6 +476,7 @@ export default function SettingsPanel({ open, onClose }: { open: boolean; onClos
                   )}
                   {playing ? "Stop" : "Preview this voice"}
                 </button>
+                {heard && <p className="-mt-2 text-[14px] text-muted">Last preview: {heard}</p>}
               </Section>
 
               <Section title="Personality" hint="Who the assistant is and how it talks.">

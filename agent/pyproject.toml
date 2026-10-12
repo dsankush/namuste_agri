@@ -9,7 +9,7 @@ description = "Voice and chat assistant for farmers, retailers and distributors 
 requires-python = ">=3.10, <3.15"
 
 dependencies = [
-    "livekit-agents[openai,sarvam]~=1.8",
+    "livekit-agents[openai,sarvam]~=1.8,>=1.8.6",
     "livekit-plugins-ai-coustics~=0.3",
     "python-dotenv",
     "supabase>=2.20,<3",

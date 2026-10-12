@@ -12,6 +12,8 @@ import os
 import re
 from dataclasses import asdict, dataclass
 
+import voices
+
 logger = logging.getLogger("agent.settings")
 
 FEMALE_SPEAKERS = [
@@ -48,6 +50,7 @@ MALE_SPEAKERS = [
 ]
 SPEAKERS = FEMALE_SPEAKERS + MALE_SPEAKERS
 
+ENGINES = ("natural", "classic")
 AMBIENCE = ("off", "office", "crowded", "city", "forest")
 STYLES = ("casual", "balanced", "formal")
 LENGTHS = ("short", "normal")
@@ -69,8 +72,11 @@ MODEL_RE = re.compile(r"^[a-z0-9][a-z0-9.\-]{1,40}$")
 
 @dataclass
 class Settings:
-    # Voice
-    voice_speaker: str = os.getenv("SARVAM_TTS_SPEAKER", "priya")
+    # Voice. "natural" = bulbul:v4-flash persona voices; "classic" = bulbul:v3.
+    voice_engine: str = os.getenv("SARVAM_VOICE_ENGINE", "natural")
+    voice_natural: str = os.getenv("SARVAM_TTS_VOICE", voices.DEFAULT_V4_VOICE)
+    voice_pitch: float = 0.0  # natural voices only
+    voice_speaker: str = os.getenv("SARVAM_TTS_SPEAKER", "priya")  # classic / backup
     voice_pace: float = float(os.getenv("SARVAM_TTS_PACE", "1.1"))
     voice_expressiveness: float = float(os.getenv("SARVAM_TTS_TEMPERATURE", "0.75"))
     # Personality
@@ -96,8 +102,30 @@ class Settings:
     llm_temperature: float = 0.4
 
     @property
+    def natural(self) -> bool:
+        return self.voice_engine == "natural"
+
+    @property
     def is_male(self) -> bool:
+        if self.natural:
+            return voices.gender(self.voice_natural) == "male"
         return self.voice_speaker in MALE_SPEAKERS
+
+    @property
+    def backup_speaker(self) -> str:
+        """Classic voice; for natural mode it must match the natural voice's gender."""
+        if self.natural and (self.voice_speaker in MALE_SPEAKERS) != self.is_male:
+            return "shubh" if self.is_male else "priya"
+        return self.voice_speaker
+
+    def voice_for(self, language: str) -> voices.VoiceChoice:
+        return voices.pick(
+            language,
+            self.voice_natural,
+            self.backup_speaker,
+            self.is_male,
+            self.natural,
+        )
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -127,7 +155,17 @@ def clean(raw: dict | None) -> Settings:
         or d.assistant_name
     )
     model = str(r.get("llm_model") or d.llm_model).strip()
+    natural = str(r.get("voice_natural", "")).lower()
+    if not (
+        natural in voices.V4_VOICES
+        and voices.gender(natural)
+        and natural.split("_")[0] not in voices.INTERNATIONAL
+    ):
+        natural = d.voice_natural
     return Settings(
+        voice_engine=_pick(r.get("voice_engine"), ENGINES, d.voice_engine),
+        voice_natural=natural,
+        voice_pitch=_num(r.get("voice_pitch"), -0.5, 0.5, d.voice_pitch),
         voice_speaker=_pick(
             str(r.get("voice_speaker", "")).lower(), SPEAKERS, d.voice_speaker
         ),

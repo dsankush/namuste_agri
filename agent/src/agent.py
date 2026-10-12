@@ -42,6 +42,7 @@ from pydantic import BaseModel, Field
 
 import languages
 import prompts
+import voices
 from db import DB, DBError, compact
 from settings import Settings
 from settings import clean as clean_settings
@@ -177,7 +178,11 @@ class BaseAgent(Agent):
         if code == self.state.language:
             return
         self.state.language = code
-        self.state.tts.update_options(target_language_code=code)
+        try:
+            # Natural voices speak one language each, so the voice may change too.
+            self.state.tts.update_options(**_voice_options(code, self.state.settings))
+        except ValueError:
+            logger.exception("could not switch voice to %s", code)
         await self.refresh()
         if self.state.conversation_id:
             self.state.spawn(
@@ -885,19 +890,35 @@ class FarmerAgent(CustomerAgent):
 server = AgentServer()
 
 
+def _voice_options(language: str, settings: Settings) -> dict:
+    """Model, speaker and tone for a language (see voices.py)."""
+    choice = settings.voice_for(language)
+    natural = choice.model == voices.V4_MODEL
+    return {
+        "model": choice.model,
+        "speaker": choice.speaker,
+        "target_language_code": language,
+        # Natural voices: tone comes from the persona; pitch is adjustable.
+        # Classic voices: "expressiveness" (temperature) makes them livelier.
+        "temperature": min(settings.voice_expressiveness, 1.0)
+        if natural
+        else settings.voice_expressiveness,
+        "pitch": settings.voice_pitch if natural else 0.0,
+    }
+
+
 def _build_tts(language: str, settings: Settings | None = None) -> sarvam.TTS:
     s = settings or Settings()
+    opts = _voice_options(language, s)
+    logger.info("voice: %s / %s (%s)", opts["model"], opts["speaker"], language)
     return sarvam.TTS(
-        target_language_code=language,
-        model=os.getenv("SARVAM_TTS_MODEL", "bulbul:v3"),
-        speaker=s.voice_speaker,
+        **opts,
         # Speaking speed (Settings > Voice). 1.0 is Sarvam's normal speed.
         pace=s.voice_pace,
-        # Expressiveness (Settings > Voice). Higher = livelier, less flat.
-        temperature=s.voice_expressiveness,
         # Start speaking after ~30 characters instead of 50 (lower = faster first audio).
         min_buffer_size=30,
         max_chunk_length=150,
+        # Highest quality the live (streaming) voice supports.
         speech_sample_rate=24000,
     )
 

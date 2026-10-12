@@ -194,6 +194,7 @@ def test_settings_are_clamped_and_bad_values_ignored():
 
     s = S.clean(
         {
+            "voice_engine": "classic",
             "voice_speaker": "Shubh",
             "voice_pace": 9,
             "reply_delay": "abc",
@@ -216,9 +217,41 @@ def test_male_voice_changes_wording_and_prompt(state):
     import settings as S
 
     assert "रहा" in L.greeting("hi-IN", "Rahul", "Kisan Sathi", male=True)
-    male = S.clean({"voice_speaker": "rahul", "assistant_name": "Rahul"})
+    male = S.clean({"voice_natural": "rahul_hi_conversational", "assistant_name": "Rahul"})
     fields = P.persona(male)
     assert fields["gender"] == "man" and fields["assistant"] == "Rahul"
     state.settings = male
     text = A.IntakeAgent(state=state).instructions
     assert "Rahul" in text and "{" not in text.split("# Examples")[0]
+
+
+def test_natural_voice_is_matched_per_language():
+    import settings as S
+    import voices as V
+
+    s = S.clean({})
+    assert s.natural and s.voice_for("hi-IN").model == V.V4_MODEL
+    # Marathi has natural voices; Odia does not -> classic voice of the same gender
+    mr = s.voice_for("mr-IN")
+    assert mr.model == V.V4_MODEL and V.gender(mr.speaker) == "female"
+    assert s.voice_for("od-IN") == V.VoiceChoice(V.V3_MODEL, "priya")
+    male = S.clean(
+        {"voice_natural": "rahul_hi_conversational", "voice_speaker": "ritu"}
+    )
+    assert male.is_male and male.voice_for("od-IN").speaker == "shubh"
+    # unknown or international voices are refused
+    assert (
+        S.clean({"voice_natural": "amelia_en_conversational"}).voice_natural
+        == V.DEFAULT_V4_VOICE
+    )
+    assert S.clean({"voice_natural": "nobody_hi_x"}).voice_natural == V.DEFAULT_V4_VOICE
+
+
+async def test_switching_language_changes_voice_model(state, monkeypatch):
+    monkeypatch.setenv("SARVAM_API_KEY", "x")
+    state.tts = A._build_tts("hi-IN", state.settings)
+    agent = A.IntakeAgent(state=state)
+    await agent.apply_language("od-IN")  # no natural Odia voice
+    assert state.tts._opts.model == "bulbul:v3"
+    await agent.apply_language("mr-IN")
+    assert state.tts._opts.model == "bulbul:v4-flash"
