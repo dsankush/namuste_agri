@@ -25,6 +25,7 @@ The agent must be running: either deployed on LiveKit Cloud, or `lk agent dev` i
    - `LIVEKIT_API_SECRET`
    - optional: `AGENT_NAME` (default `kisan-sathi`), `NEXT_PUBLIC_BRAND_NAME`, `NEXT_PUBLIC_BUSINESS_NAME`,
      `NEXT_PUBLIC_ASSISTANT_NAME`, `NEXT_PUBLIC_DEMO_URL`
+   - for the Settings panel: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ADMIN_PASSWORD`, `SARVAM_API_KEY`
 5. Deploy.
 
 ## How it works
@@ -34,6 +35,15 @@ The agent must be running: either deployed on LiveKit Cloud, or `lk agent dev` i
 - The page joins the room over WebRTC. Voice uses the microphone; Chat sends text on `lk.chat`.
   Switching Voice/Chat or language mid-conversation updates participant attributes and the agent follows.
 - The agent publishes tool activity on the `agent.activity` topic, shown in **Live Actions**.
+
+## Settings panel
+
+Click the sliders button in the header (or **MENU → Settings**) and enter `ADMIN_PASSWORD`.
+You can tune the voice (speaker, speed, expressiveness, with a preview), personality (name, speaking style,
+reply length, default language, using the customer's name), timing (reply delay, waits, interruptions,
+"one second" fillers), background sound and the AI model. Settings are saved in the Supabase table
+`agent_settings` and the agent reads them at the start of every call, so there is nothing to redeploy.
+Create the table once with `supabase/agent_settings.sql` (Supabase → SQL Editor → Run).
 
 ## Customise
 

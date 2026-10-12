@@ -14,6 +14,7 @@ import { Globe, RotateCcw, Sprout, Store, Phone, MessageSquare } from "lucide-re
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CUSTOMER_TYPES, LANGUAGES, type CustomerType, type Mode } from "@/lib/config";
 import Header from "./Header";
+import SettingsPanel from "./SettingsPanel";
 import AssistantPanel from "./AssistantPanel";
 import ConversationPanel from "./ConversationPanel";
 import ActionsPanel, { type Snapshot, type ToolEvent } from "./ActionsPanel";
@@ -84,6 +85,7 @@ function Shell({
   const agent = useAgent();
   const { messages, send } = useSessionMessages(session);
   const [customerType, setCustomerType] = useState<CustomerType>("farmer");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<Snapshot>({});
   const [events, setEvents] = useState<ToolEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -252,10 +254,13 @@ function Shell({
   const langLabel = LANGUAGES.find((l) => l.code === language)?.label ?? "Auto Detect";
 
   return (
+    <>
     <div className="app-scale min-h-dvh bg-page">
       <Header
         status={status}
-        onMenuAction={(a) => (a === "reset" ? reset() : (changeMode(a), start(a)))}
+        onMenuAction={(a) =>
+          a === "settings" ? setSettingsOpen(true) : a === "reset" ? reset() : (changeMode(a), start(a))
+        }
       />
 
       <main className="mx-0 mt-4 rounded-t-[32px] bg-stage px-2 pb-6 pt-3 sm:mt-9 sm:rounded-t-[56px] sm:px-3">
@@ -357,5 +362,7 @@ function Shell({
         <div className="mx-auto mt-6 h-[7px] w-[148px] rounded-full bg-muted-2/40" />
       </main>
     </div>
+    <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+    </>
   );
 }

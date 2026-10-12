@@ -25,6 +25,9 @@ from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
+    AudioConfig,
+    BackgroundAudioPlayer,
+    BuiltinAudioClip,
     JobContext,
     RunContext,
     ToolError,
@@ -40,14 +43,14 @@ from pydantic import BaseModel, Field
 import languages
 import prompts
 from db import DB, DBError, compact
+from settings import Settings
+from settings import clean as clean_settings
 
 logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
 
 QUOTE_TTL_SECONDS = 10 * 60
-# Speak a short "one second, checking" line if a lookup keeps the caller waiting this long.
-FILLER_DELAY_SECONDS = float(os.getenv("FILLER_DELAY_SECONDS", "0.8"))
 MAX_CARTONS_PER_LINE = 10_000
 
 
@@ -59,6 +62,7 @@ class SessionState:
     db: DB
     tts: sarvam.TTS
     room_name: str
+    settings: Settings = field(default_factory=Settings)
     channel: Literal["voice", "chat"] = "voice"
     language: str = languages.DEFAULT_LANGUAGE
     language_locked: bool = False  # customer chose a language explicitly
@@ -150,6 +154,7 @@ class BaseAgent(Agent):
             profile=_profile_for_prompt(c) if c else "",
             role=self.state.role or "",
             channel="typed chat" if self.state.channel == "chat" else "a voice call",
+            **prompts.persona(self.state.settings),
         )
 
     def waiting(self, context: RunContext[SessionState]):
@@ -157,9 +162,11 @@ class BaseAgent(Agent):
         st = self.state
 
         def source(_step: int) -> str | None:
-            return None if st.channel == "chat" else languages.filler(st.language)
+            if st.channel == "chat" or not st.settings.fillers_enabled:
+                return None
+            return languages.filler(st.language, male=st.settings.is_male)
 
-        return context.with_filler(source, delay=FILLER_DELAY_SECONDS)
+        return context.with_filler(source, delay=st.settings.filler_delay)
 
     async def refresh(self) -> None:
         await self.update_instructions(self.render())
@@ -303,14 +310,23 @@ class IntakeAgent(BaseAgent):
 
     def __init__(self, state: SessionState, **kwargs) -> None:
         # People pause while saying a mobile number; wait a little longer before replying.
-        kwargs.setdefault("min_endpointing_delay", 1.2)
-        kwargs.setdefault("max_endpointing_delay", 4.0)
+        wait = state.settings.number_wait
+        kwargs.setdefault("min_endpointing_delay", wait)
+        kwargs.setdefault(
+            "max_endpointing_delay", max(wait + 1.5, state.settings.max_wait)
+        )
         super().__init__(state, **kwargs)
 
     async def on_enter(self) -> None:
         # Fixed greeting: plays instantly instead of waiting for the AI model.
+        st = self.state
         self.session.say(
-            languages.greeting(self.state.language, prompts.ASSISTANT, prompts.COMPANY)
+            languages.greeting(
+                st.language,
+                st.settings.assistant_name,
+                prompts.COMPANY,
+                male=st.settings.is_male,
+            )
         )
 
     def _next_agent(self) -> Agent:
@@ -869,15 +885,16 @@ class FarmerAgent(CustomerAgent):
 server = AgentServer()
 
 
-def _build_tts(language: str) -> sarvam.TTS:
+def _build_tts(language: str, settings: Settings | None = None) -> sarvam.TTS:
+    s = settings or Settings()
     return sarvam.TTS(
         target_language_code=language,
         model=os.getenv("SARVAM_TTS_MODEL", "bulbul:v3"),
-        speaker=os.getenv("SARVAM_TTS_SPEAKER", "priya"),
-        # A touch faster than default; Indian callers find 1.0 slow on the phone.
-        pace=float(os.getenv("SARVAM_TTS_PACE", "1.1")),
-        # Higher = more expressive, less flat. 0.6 is Sarvam's default.
-        temperature=float(os.getenv("SARVAM_TTS_TEMPERATURE", "0.75")),
+        speaker=s.voice_speaker,
+        # Speaking speed (Settings > Voice). 1.0 is Sarvam's normal speed.
+        pace=s.voice_pace,
+        # Expressiveness (Settings > Voice). Higher = livelier, less flat.
+        temperature=s.voice_expressiveness,
         # Start speaking after ~30 characters instead of 50 (lower = faster first audio).
         min_buffer_size=30,
         max_chunk_length=150,
@@ -1004,12 +1021,15 @@ async def entrypoint(ctx: JobContext) -> None:
         await ctx.connect()
         participant = await ctx.wait_for_participant()
         attrs = dict(participant.attributes or {})
+    # Settings from the website's Settings panel (falls back to defaults).
+    settings = clean_settings(await db.load_settings())
     requested_lang = attrs.get("language")
-    language = languages.normalise(requested_lang)
+    language = languages.normalise(requested_lang or settings.default_language)
 
-    tts = _build_tts(language)
+    tts = _build_tts(language, settings)
     state = SessionState(
         db=db,
+        settings=settings,
         tts=tts,
         room_name=ctx.room.name,
         language=language,
@@ -1023,18 +1043,18 @@ async def entrypoint(ctx: JobContext) -> None:
         stt=sarvam.STT(
             language="unknown", model=os.getenv("SARVAM_STT_MODEL", "saaras:v4")
         ),
-        llm=openai.LLM(
-            model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"), temperature=0.3
-        ),
+        llm=openai.LLM(model=settings.llm_model, temperature=settings.llm_temperature),
         tts=tts,
         max_tool_steps=6,
         turn_handling=TurnHandlingOptions(
             turn_detection=inference.TurnDetector(),
-            interruption={"mode": "adaptive"},
-            # Reply sooner after the customer stops talking (intake waits longer for numbers).
+            interruption={"mode": "adaptive"}
+            if settings.allow_interruptions
+            else {"enabled": False},
+            # How soon to reply after the customer stops talking (intake waits longer for numbers).
             endpointing={
-                "min_delay": float(os.getenv("ENDPOINT_MIN_DELAY", "0.35")),
-                "max_delay": float(os.getenv("ENDPOINT_MAX_DELAY", "2.5")),
+                "min_delay": settings.reply_delay,
+                "max_delay": max(settings.max_wait, settings.reply_delay + 0.5),
             },
             # Off: tools place orders, so never generate before the user finishes.
             preemptive_generation={"enabled": False},
@@ -1214,6 +1234,42 @@ async def entrypoint(ctx: JobContext) -> None:
     if participant:
         _apply_mode(session, state, attrs.get("mode"))
         publish_snapshot()
+        await _start_background_audio(ctx, session, settings)
+
+
+AMBIENCE_CLIPS = {
+    "office": BuiltinAudioClip.OFFICE_AMBIENCE,
+    "crowded": BuiltinAudioClip.CROWDED_ROOM,
+    "city": BuiltinAudioClip.CITY_AMBIENCE,
+    "forest": BuiltinAudioClip.FOREST_AMBIENCE,
+}
+
+
+async def _start_background_audio(ctx: JobContext, session, settings: Settings) -> None:
+    """Optional room tone and typing sounds, so silence feels less like a machine."""
+    ambient = AMBIENCE_CLIPS.get(settings.ambience)
+    if not ambient and not settings.thinking_sound:
+        return
+    try:
+        player = BackgroundAudioPlayer(
+            ambient_sound=AudioConfig(ambient, volume=settings.ambience_volume)
+            if ambient and settings.ambience_volume > 0
+            else None,
+            thinking_sound=[
+                AudioConfig(
+                    BuiltinAudioClip.KEYBOARD_TYPING, volume=settings.thinking_volume
+                ),
+                AudioConfig(
+                    BuiltinAudioClip.KEYBOARD_TYPING2,
+                    volume=settings.thinking_volume * 0.8,
+                ),
+            ]
+            if settings.thinking_sound and settings.thinking_volume > 0
+            else None,
+        )
+        await player.start(room=ctx.room, agent_session=session)
+    except Exception:  # background sound must never break a call
+        logger.exception("background audio failed to start")
 
 
 if __name__ == "__main__":

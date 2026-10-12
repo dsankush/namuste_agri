@@ -258,6 +258,23 @@ class DB:
             keep_nulls=True,
         )
 
+    # ---------- settings (edited from the website) ----------
+    async def load_settings(self) -> dict:
+        try:
+            res = (
+                await self._c.table("agent_settings")
+                .select("settings")
+                .eq("id", "default")
+                .limit(1)
+                .execute()
+            )
+            return (res.data[0]["settings"] if res.data else {}) or {}
+        except Exception:
+            logger.warning(
+                "agent_settings not available, using defaults", exc_info=True
+            )
+            return {}
+
     # ---------- conversation log (direct table writes) ----------
     async def start_conversation(
         self, channel: str, room: str, language: str

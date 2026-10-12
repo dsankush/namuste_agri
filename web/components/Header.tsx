@@ -1,6 +1,6 @@
 "use client";
 
-import { Menu, Moon, Sun, X } from "lucide-react";
+import { Menu, Moon, SlidersHorizontal, Sun, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { BRAND, DEMO_URL } from "@/lib/config";
 
@@ -26,7 +26,7 @@ export default function Header({
   onMenuAction,
 }: {
   status: { live: boolean; text: string };
-  onMenuAction: (a: "voice" | "chat" | "reset") => void;
+  onMenuAction: (a: "voice" | "chat" | "reset" | "settings") => void;
 }) {
   const [dark, setDark] = useState(false);
   const [open, setOpen] = useState(false);
@@ -52,6 +52,14 @@ export default function Header({
       </div>
 
       <div className="flex items-center gap-2 sm:gap-6">
+        <button
+          onClick={() => onMenuAction("settings")}
+          aria-label="Settings"
+          title="Settings"
+          className="grid size-11 place-items-center rounded-full border border-line bg-card-soft text-ink transition hover:border-g400 sm:size-[54px]"
+        >
+          <SlidersHorizontal className="size-5" />
+        </button>
         <button
           onClick={toggleTheme}
           aria-label="Toggle dark mode"
@@ -81,6 +89,7 @@ export default function Header({
                   ["voice", "Start a voice call"],
                   ["chat", "Start a chat"],
                   ["reset", "Reset conversation"],
+                  ["settings", "Settings"],
                 ] as const
               ).map(([k, label]) => (
                 <button

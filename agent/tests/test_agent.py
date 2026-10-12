@@ -187,3 +187,38 @@ async def test_lookups_use_fillers_but_not_in_chat(state):
     assert source(0)  # voice: speaks a filler
     state.channel = "chat"
     assert source(0) is None  # chat: no filler message
+
+
+def test_settings_are_clamped_and_bad_values_ignored():
+    import settings as S
+
+    s = S.clean(
+        {
+            "voice_speaker": "Shubh",
+            "voice_pace": 9,
+            "reply_delay": "abc",
+            "ambience": "disco",
+            "llm_model": "gpt 4; drop table",
+            "use_customer_name": "yes",
+        }
+    )
+    assert s.voice_speaker == "shubh" and s.is_male
+    assert s.voice_pace == 2.0
+    assert s.reply_delay == S.Settings().reply_delay
+    assert s.ambience == "off"
+    assert s.llm_model == S.Settings().llm_model
+    assert s.use_customer_name is True
+    assert S.clean(None) == S.Settings()
+
+
+def test_male_voice_changes_wording_and_prompt(state):
+    import prompts as P
+    import settings as S
+
+    assert "रहा" in L.greeting("hi-IN", "Rahul", "Kisan Sathi", male=True)
+    male = S.clean({"voice_speaker": "rahul", "assistant_name": "Rahul"})
+    fields = P.persona(male)
+    assert fields["gender"] == "man" and fields["assistant"] == "Rahul"
+    state.settings = male
+    text = A.IntakeAgent(state=state).instructions
+    assert "Rahul" in text and "{" not in text.split("# Examples")[0]

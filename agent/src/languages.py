@@ -90,13 +90,28 @@ FILLERS: dict[str, list[str]] = {
 }
 
 
-def greeting(lang: str, assistant: str, company: str) -> str:
-    return GREETINGS.get(normalise(lang), GREETINGS[DEFAULT_LANGUAGE]).format(
-        a=assistant, c=company
-    )
+# Male-voice wording for languages whose verbs change with gender.
+GREETINGS_MALE: dict[str, str] = {
+    "hi-IN": "नमस्ते! मैं {a}, {c} से बोल रहा हूँ। अपना मोबाइल नंबर बताइए?",
+    "mr-IN": "नमस्कार! मी {a}, {c} मधून बोलतोय. तुमचा मोबाईल नंबर सांगाल का?",
+    "pa-IN": "ਸਤ ਸ੍ਰੀ ਅਕਾਲ ਜੀ! ਮੈਂ {a}, {c} ਤੋਂ ਬੋਲ ਰਿਹਾ ਹਾਂ। ਆਪਣਾ ਮੋਬਾਈਲ ਨੰਬਰ ਦੱਸੋ?",
+}
+FILLERS_MALE: dict[str, list[str]] = {
+    "hi-IN": ["एक सेकंड, देख रहा हूँ।", "हाँ जी, बस एक मिनट।", "ठीक है, चेक करता हूँ।"],
+    "mr-IN": ["एक सेकंद, बघतो हं.", "हो, जरा थांबा."],
+    "pa-IN": ["ਇੱਕ ਸਕਿੰਟ, ਵੇਖਦਾ ਹਾਂ।", "ਹਾਂ ਜੀ, ਬੱਸ ਇੱਕ ਮਿੰਟ।"],
+}
 
 
-def filler(lang: str) -> str:
+def greeting(lang: str, assistant: str, company: str, male: bool = False) -> str:
+    code = normalise(lang)
+    table = {**GREETINGS, **GREETINGS_MALE} if male else GREETINGS
+    return table.get(code, GREETINGS[DEFAULT_LANGUAGE]).format(a=assistant, c=company)
+
+
+def filler(lang: str, male: bool = False) -> str:
     import random
 
-    return random.choice(FILLERS.get(normalise(lang), FILLERS[DEFAULT_LANGUAGE]))
+    code = normalise(lang)
+    table = {**FILLERS, **FILLERS_MALE} if male else FILLERS
+    return random.choice(table.get(code, FILLERS[DEFAULT_LANGUAGE]))
