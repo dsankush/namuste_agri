@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
+import aiohttp
 from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import (
@@ -118,6 +119,40 @@ def _profile_for_prompt(c: dict) -> str:
 
 def _err(e: DBError) -> ToolError:
     return ToolError(e.for_llm())
+
+
+# ---------------------------------------------------------------------------
+# WhatsApp notifications — fires the "immediate" events (order placed,
+# cancelled, an advisory given, an escalation) to the namuste-site handler,
+# which composes and sends the actual template. Never raises: a failed
+# notify must never break the surrounding tool call.
+# ---------------------------------------------------------------------------
+NOTIFY_URL = os.getenv(
+    "WHATSAPP_NOTIFY_URL", "https://namuste.com/api/whatsapp/agri-event"
+)
+
+
+async def _notify(event: str, state: SessionState, **data) -> None:
+    secret = os.getenv("AGRI_NOTIFY_SECRET")
+    mobile = (state.customer or {}).get("mobile") or state.pending_mobile
+    if not secret or not mobile:
+        return
+    payload = {
+        "event": event,
+        "role": state.role,
+        "to": mobile,
+        "data": {"customer_name": (state.customer or {}).get("name"), **data},
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            await session.post(
+                NOTIFY_URL,
+                json=payload,
+                headers={"Authorization": f"Bearer {secret}"},
+                timeout=aiohttp.ClientTimeout(total=5),
+            )
+    except Exception:
+        logger.warning("whatsapp notify failed for event=%s", event, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +260,7 @@ class BaseAgent(Agent):
             )
         except DBError as e:
             raise _err(e) from e
+        self.state.spawn(_notify("callback_received", self.state, reason=reason))
         return compact(
             {
                 **res,
@@ -568,6 +604,16 @@ class TradeAgent(CustomerAgent):
             await self.refresh()
         except DBError:
             pass
+        st.spawn(
+            _notify(
+                "order_confirmed",
+                st,
+                order_number=res.get("order_number"),
+                total=res.get("total"),
+                payment_mode=payment_mode,
+                items_text=", ".join(f"{ln.sku_code} x{ln.cartons}" for ln in items),
+            )
+        )
         return compact(res)
 
     @function_tool
@@ -602,11 +648,13 @@ class TradeAgent(CustomerAgent):
         if not customer_confirmed:
             raise ToolError("Confirm with the customer before cancelling.")
         try:
-            return compact(
-                await self.state.db.cancel_order(self.state.customer_id, order_number)
-            )
+            res = await self.state.db.cancel_order(self.state.customer_id, order_number)
         except DBError as e:
             raise _err(e) from e
+        self.state.spawn(
+            _notify("order_cancelled", self.state, order_number=order_number)
+        )
+        return compact(res)
 
     @function_tool
     async def notify_when_in_stock(
@@ -763,6 +811,7 @@ class FarmerAgent(CustomerAgent):
                 logger.warning("could not save crop: %s", e.code)
 
         best = (result.get("pack_options") or [{}])[0]
+        packs_text = f"{best.get('packs')} x {best.get('pack')}" if best else None
         st.spawn(
             st.db.save_advisory(
                 customer_id=st.customer_id,
@@ -774,11 +823,21 @@ class FarmerAgent(CustomerAgent):
                     "product": result.get("product") or product,
                     "acres": acres,
                     "total": result.get("total_needed"),
-                    "packs": f"{best.get('packs')} x {best.get('pack')}"
-                    if best
-                    else None,
+                    "packs": packs_text,
                 },
                 conversation_id=st.conversation_id,
+            )
+        )
+        st.spawn(
+            _notify(
+                "advisory_given",
+                st,
+                crop=crop_key,
+                issue_or_symptom=diagnosed_issue or symptoms,
+                product=result.get("product") or product,
+                total_needed=result.get("total_needed"),
+                acres=acres,
+                packs=packs_text,
             )
         )
         return compact(result)
